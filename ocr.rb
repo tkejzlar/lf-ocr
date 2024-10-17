@@ -7,6 +7,10 @@ require 'ruby/openai'
 require 'base64'
 require 'csv'
 require 'slop'
+require 'yaml'
+
+# Load config
+@config = YAML.load_file('config/config.yml')
 
 # List of image paths
 alliance = Dir["alliance/*.png"]
@@ -21,7 +25,6 @@ cities = Dir["cities/*.png"]
 }
 
 @ids = {}
-@gpt = 'sk-svcacct-KtMxhtxWL7H82fRHRLjYl42v4cSDrmGgQlps6CIs9C4DWxpwPwsNzVA6ux9ZfyT3BlbkFJpLPIVG6qditOgbxxP-hUrUmVuUqyvbhevTVDiiFJjhG2xWkixwc_JzGFlDDqIA'
 
 @workbook = RubyXL::Parser.parse("alliance.xlsx")
 pp @workbook['CPs'].sheet_data.size
@@ -39,7 +42,7 @@ end
 
 
 def extract_info_gpt(prompt, images = [])
-  gpt = OpenAI::Client.new(access_token: @gpt)
+  gpt = OpenAI::Client.new(access_token: @config['gpt'])
   
   messages = []
   images.each do |image|
@@ -80,102 +83,6 @@ def populate_player_list
   end
 end
 
-# Function to extract player names and combat power
-def extract_player_info(image_path, index, type)
-  image = Magick::Image::read(image_path).first
-  index == 0 && @crops.has_key?("#{type}_first") ? crop = @crops["#{type}_first"] : crop = @crops[type]
-  crop = @crops[type]
-  cropped_name = "temp-cropped-#{index}.jpg"
-  cropped_image = image.crop(crop[0], crop[1], crop[2], crop[3], true);
-  cropped_image.write(cropped_name)
-  return cropped_name
-end
-
-def get_first_empty_row(worksheet)
-  sheet = @workbook[worksheet]
-  
-end
-
-# Function to parse the text to extract player names and combat power
-def parse_text(text, type)
-  if type == 'alliance'
-    parse_text_alliance(text)
-  elsif type == 'ad'
-    parse_text_ad(text)
-  else
-    parse_text_cities(text)
-  end
-end
-  
-def parse_text_alliance(text)
-  was_name = false
-  results = []
-  names = []
-  scores = []
-  text.split("\n").each do |line|
-    name = line.match(/(.{4,})/)
-    cp = line.match(/(\d{1,3},\d{1,3},\d{1,3})/)
-    if !name.nil? && !name.to_s.downcase.include?('hours') && !name.to_s.downcase.include?('online') && name.to_s[0,2].downcase != "ii" && !name.to_s.downcase.include?('just now') && !name.to_s.downcase.include?('minutes ago') && !name.to_s.downcase.include?('days ago') && name.to_s[0,2].downcase != "i " && was_name == false
-      results << sanitize_player_name(name.to_s)
-      was_name = true
-    end
-    if !cp.nil?
-      results << sanitize_number(cp.to_s)
-      was_name = false
-    end
-  end
-  results.pop if results.length.odd?
-  Hash[*results].each do |name, cp|
-    names << name
-    scores << cp
-  end
-  return names, scores
-end
-
-def parse_text_ad(text)
-  names = []
-  scores = []
-  text.split("\n").each do |line|
-    name = line.match(/(.{4,})/)
-    score = line.match(/(\d{1,3},\d{1,3},\d{1,3})/)
-    if !name.nil? && name.to_s[1,3] != "ULX" && !name.to_s.match(/(\d{1,3},\d{1,3},\d{1,3})/)
-      names << sanitize_player_name(name.to_s)
-    end
-    if !score.nil?
-      scores << sanitize_number(score.to_s)
-    end
-  end
-  return names, scores
-end
-
-def parse_text_cities(text)
-  names = []
-  scores = []
-  list_processing = false
-  text.split("Merits").last.to_s.split("\n").each do |line|
-    if line.length != 0
-      if line.match(/\S*\s(\S*)\s(\d,\d*)\s?\+?(\d*)/)
-        data = line.match(/\S*\s(\S*)\s(\d,\d*)\s?\+?(\d*)/)
-        name = data[1]
-        score = data[2]
-        merit = data[3]
-        names << sanitize_player_name(name)
-        scores << sanitize_number(score)
-      else
-        list_processing = true
-      end
-    end
-  end
-  if list_processing == true
-    data = text.scan(/(\S+)\s([0-9,]+)/)
-    data.each do |entry|
-      names << sanitize_player_name(entry[0])
-      scores << sanitize_number(entry[1])
-    end
-  end
-  return names, scores
-end
-
 def sanitize_player_name(str)
   clean_name = str.gsub(/\W*/,'')
   similarities = {}
@@ -191,14 +98,11 @@ def sanitize_player_name(str)
   return clean_name
 end
 
-def sanitize_number(str)
-  return str.split(',').join('').to_i
-end
-
 def print_data(output, *columns)
   columns.reject!(&:empty?)
   output.each do |name, score|
     next if name[0,3] == '```'
+    name = sanitize_player_name(name)
     if columns.length > 0
       puts "#{name}\t#{score}\t#{columns.join("\t")}\t#{Time.now.strftime("%d/%m/%Y")}"
     else
