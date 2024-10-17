@@ -1,0 +1,8 @@
+# exclude everything
+ad/*
+alliance/*
+cities/*
+
+ad/.gitkeep 
+alliance/.gitkeep
+cities/.gitkeep
