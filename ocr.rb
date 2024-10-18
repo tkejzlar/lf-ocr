@@ -27,8 +27,6 @@ cities = Dir["cities/*.png"]
 @ids = {}
 
 @workbook = RubyXL::Parser.parse("alliance.xlsx")
-pp @workbook['CPs'].sheet_data.size
-Kernel.exit
 
 opts = Slop.parse do |o|
   o.bool '-ad', '--alliance-duel', 'parse alliance duel data'
