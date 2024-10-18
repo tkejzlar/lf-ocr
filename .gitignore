@@ -1,4 +1,5 @@
 # exclude everything
+*.jpg
 ad/*
 alliance/*
 cities/*
