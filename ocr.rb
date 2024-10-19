@@ -18,13 +18,7 @@ require 'date'
 alliance = Dir["alliance/*.png"]
 ad = Dir["ad/*.png"]
 cities = Dir["cities/*.png"]
-@crops = {
-  'alliance' => [666,116,(2556-666),(1017-116)], 
-  'alliance_first' => [666,416,(2556-666),(1017-416)],
-  'ad' => [738,397,(2108-738),(888-397)], 
-  'cities_rally' => [844, 148, (1557-844), (990-148)], 
-  'cities_dm' => [1681, 148, (2270-1681), (990-148)]
-}
+fountain = Dir["dimensions/fountain/*.png"]
 
 @ids = {}
 @workbook = RubyXL::Parser.parse("alliance.xlsx")
@@ -34,6 +28,7 @@ opts = Slop.parse do |o|
   o.bool '-ad', '--alliance-duel', 'parse alliance duel data'
   o.bool '-cp', '--combat-powers', 'parse combat power data'
   o.bool '-ct', '--cities', 'parse city capture data'
+  o.bool '-df', '--dimension-fountain', 'parse Fountain of Life weekly leaderboard'
   o.on '--version', 'print the version' do
     puts Slop::VERSION
     exit
@@ -72,12 +67,23 @@ end
 # Crop images to extract only the parts containing relevant info
 def extract_player_info(image_path, index, type)
   image = Magick::Image::read(image_path).first
-  index == 0 && @crops.has_key?("#{type}_first") ? crop = @crops["#{type}_first"] : crop = @crops[type]
-  crop = @crops[type]
+  index == 0 && @config['crops'].has_key?("#{type}_first") ? crop = @config['crops']["#{type}_first"] : crop = @config['crops'][type]
+  crop = @config['crops'][type]
   cropped_name = "temp-cropped-#{index}.jpg"
-  cropped_image = image.crop(crop[0], crop[1], crop[2], crop[3], true);
+  cropped_image = image.crop(crop[0], crop[1], crop[2], crop[3], true)
   cropped_image.write(cropped_name)
   return cropped_name
+end
+
+def get_city_name(image_path)
+  image = Magick::Image::read(image_path).first
+  crop = @config['crops']['cities_name']
+  cropped_image = image.crop(crop[0], crop[1], crop[2], crop[3], true);
+  cropped_image.write("temp-cropped-cityname.jpg")
+  ocr = RTesseract.new("temp-cropped-cityname.jpg")
+  match = ocr.to_s.match(/Lv.([0-9])\s*(\S+)/)
+  match == nil ? r = nil : r = [match[1].to_i, match[2]]
+  return r
 end
 
 # Get current alliance members and prepare a string similarity matrix to avoid unnecessary bloating of the Excel
@@ -134,17 +140,18 @@ def print_data(output, *columns)
 end
 
 # write data into excel
-def write_data_excel(worksheet, data, *columns)
+def write_data_excel(type, data, *columns)
+  worksheet = @config['excel'][type]['sheet']
   sheet = @workbook[worksheet]
   first_empty = find_first_empty_row(worksheet)
   data.select{ |k,v| k[0,3] != '```' }.to_a.each_with_index do |row, i|
     rowno = first_empty + i
-    sheet.add_cell(rowno, 0, nil, @config['excel'][worksheet]['formula-a'].gsub('$ROW', (rowno + 1).to_s))
+    sheet.add_cell(rowno, 0, nil, @config['excel'][type]['formula-a'].gsub('$ROW', (rowno + 1).to_s))
     sheet.add_cell(rowno, 1, row[0])
     sheet.add_cell(rowno, 2, row[1].to_i)
-    columns.each_with_index do |cell, j|
+    columns.flatten.each_with_index do |cell, j|
       if cell[0,7] == 'formula'
-        sheet.add_cell(rowno, 3+j, nil, @config['excel'][worksheet][cell].gsub('$ROW', (rowno + 1).to_s))
+        sheet.add_cell(rowno, 3+j, nil, @config['excel'][type][cell].gsub('$ROW', (rowno + 1).to_s))
       elsif cell == 'date'
         c = sheet.add_cell(rowno, 3+j)
         c.set_number_format('dd.mm.YYYY')
@@ -156,69 +163,56 @@ def write_data_excel(worksheet, data, *columns)
   end
 end
 
+def hook_cities(image)
+  r = get_city_name(image)
+  return r if r != nil
+end
+
 # clear any temporary cropped images
 def clear_temp
   Dir.glob(["*.jpg"]) { |f| File.delete(f) }
+end
+
+# process scores for a given type of images
+def process_scores(type, crops = nil, *additional_fields)
+  puts "===== #{type.upcase} ====="
+  images = []
+  output = []
+  more_fields = []
+  crops = type if crops == nil
+  raw_images = Dir["#{type}/*.png"]
+  raw_images.each_with_index do |path, i|
+    images << extract_player_info(path, i, crops)
+    begin
+      r = send("hook_#{type}", path)
+      more_fields = r if r != nil
+    rescue
+    end
+  end
+  images.each_slice(3) do |slice|
+    output.concat(extract_info_gpt(@config['gpt']['prompts'][type], slice))
+  end
+  print_data(output)
+  formulas = @config['excel'][type].select { |k, v| k.include?('formula') && k != 'formula-a'}
+  write_data_excel(type, output, more_fields.concat(additional_fields), 'date', formulas.keys)
+  clear_temp
 end
 
 # populate player list
 populate_player_list
 
 # Loop over all images and extract information
-# TODO: refactor so we don't repeat so much code thats very similar
 if opts.combat_powers?
-  puts "===== PLAYER CPs ====="
-  images = []
-  output = []
-  alliance.each_with_index do |path, i|
-    images << extract_player_info(path, i, 'alliance')
-  end
-  images.each_slice(3) do |slice|
-    output.concat(extract_info_gpt(@config['gpt']['prompts']['alliance'], slice))
-  end
-  print_data(output)
-  write_data_excel('CPs', output, 'date', 'formula-e')
-  clear_temp
+  process_scores('alliance')
 end
 
 if opts.alliance_duel?
-  puts "===== AD SCORES ====="
-  images = []
-  output = []
-  ad.each_with_index do |path, i|
-    images << extract_player_info(path, i, 'ad')
-  end
-  images.each_slice(3) do |slice|
-    output.concat(extract_info_gpt(@config['gpt']['prompts']['ad'], slice))
-  end
-  print_data(output)
-  clear_temp
+  process_scores('ad')
 end
 
 if opts.cities?
-  puts "===== CITY RALLY SCORES ====="
-  images = []
-  output = []
-  cities.each_with_index do |path, i|
-    images << extract_player_info(path, i, 'cities_rally')
-  end
-  images.each_slice(3) do |slice|
-    output.concat(extract_info_gpt(@config['gpt']['prompts']['cities'], slice))
-  end
-  print_data(output, 'siege')
-  clear_temp
-
-  puts "===== CITY DM SCORES ====="
-  images = []
-  output = []
-  cities.each_with_index do |path, i|
-    images << extract_player_info(path, i, 'cities_dm')
-  end
-  images.each_slice(3) do |slice|
-    output.concat(extract_info_gpt(@config['gpt']['prompts']['cities'], slice))
-  end
-  print_data(output, 'dm')
-  clear_temp
+  process_scores('cities', 'cities_rally', 'siege')
+  process_scores('cities', 'cities_dm', 'dm')
 end
 
 @workbook.write("new.xlsx")

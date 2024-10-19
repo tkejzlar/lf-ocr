@@ -1,11 +1,19 @@
 ---
+  # this configures the GPT, the model being used is always 4-o-mini
+  # make sure you use your own API key for accessing the OpenAI api
   gpt: 
     key: <YOUR_OPENAI_API_KEY>
     prompts: 
       alliance: "The images I shared contain screenshots from the game Last Fortress. They represent a list of players in an alliance and their combat power (CP). All numeric values are using comma as a thousands separator. Please extract all players and their CPs (full scores, not rounded to millions or anything) in a CSV-compatible format. Your response should ONLY contain the comma separated list of player names and CPs. Also, for player names, here is the actual player list - please use it to correct what you read from the images to get consistent names: #IDS"
       ad: "The images I shared contain screenshots from the game Last Fortress. They represent a list of players in an alliance and their contributions to alliance duel. All numeric values are using comma as a thousands separator. Please extract all players and their alliance duel scores (full scores, not rounded to millions or anything) in a CSV-compatible format. Your response should ONLY contain the comma separated list of player names and CPs. Also, for player names, here is the actual player list - please use it to correct what you read from the images to get consistent names: #IDS"
       cities: "The images I shared contain screenshots from the game Last Fortress. They represent a list of players that contributed to attacking a city. There always is player name, contribution score, and for the top 3 players also merits. All numeric values are using comma as a thousands separator. Please extract all players and their contribution scores (full scores, not rounded to millions or anything, also ignore the merit scores if they exist) in a CSV-compatible format. Your response should ONLY contain the comma separated list of player names and contribution scores. Also, for player names, here is the actual player list - please use it to correct what you read from the images to get consistent names: #IDS"
+  # this defines crops for the images not to send unnecessary data to GPT; the measurements are in px and the below are from iPhone 14 Pro screenshots
   crops:
+    example:
+      - start-X
+      - start-Y
+      - width
+      - length
     alliance: 
       - 666
       - 116
@@ -31,6 +39,12 @@
       - 148
       - 589
       - 842
+    fountain:
+      - 761
+      - 328
+      - 1357
+      - 531
+  # this has excel formulas to use when adding new data, the $ROW gets replaced with actual rows
   excel:
     ADs:
       formula-a: VLOOKUP(B$ROW,IDs!B:C,2,FALSE)
