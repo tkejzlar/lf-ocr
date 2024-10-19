@@ -3,11 +3,13 @@ require 'rtesseract'
 require 'rmagick'
 require 'string/similarity'
 require 'rubyXL'
+require 'rubyXL/convenience_methods'
 require 'ruby/openai'
 require 'base64'
 require 'csv'
 require 'slop'
 require 'yaml'
+require 'date'
 
 # Load config
 @config = YAML.load_file('config/config.yml')
@@ -26,6 +28,7 @@ cities = Dir["cities/*.png"]
 
 @ids = {}
 @workbook = RubyXL::Parser.parse("alliance.xlsx")
+@workbook.calc_pr.full_calc_on_load = true
 
 opts = Slop.parse do |o|
   o.bool '-ad', '--alliance-duel', 'parse alliance duel data'
@@ -39,7 +42,7 @@ end
 
 # Use chatGPT (4-omini) and its vision component to extract info from the cropped screenshots
 def extract_info_gpt(prompt, images = [])
-  gpt = OpenAI::Client.new(access_token: @config['gpt'])
+  gpt = OpenAI::Client.new(access_token: @config['gpt']['key'])
   messages = []
   images.each do |image|
     messages << {
@@ -49,7 +52,7 @@ def extract_info_gpt(prompt, images = [])
       }
     } 
   end
-  messages << { type: "text", text: prompt }
+  messages << { type: "text", text: prompt.gsub("IDS", @ids.values.join(', ')) }
   response = gpt.chat(
         parameters: {
           model: "gpt-4o-mini",
@@ -134,13 +137,21 @@ end
 def write_data_excel(worksheet, data, *columns)
   sheet = @workbook[worksheet]
   first_empty = find_first_empty_row(worksheet)
-  data.to_a.each_with_index do |row, i|
-    next if row[0][0,3] == '```'
-    sheet.add_cell(first_empty+i, 0, '', worksheet[1][0].formula)
-    sheet.add_cell(first_empty+i, 1, row[0])
-    sheet.add_cell(first_empty+i, 2, row[1])
+  data.select{ |k,v| k[0,3] != '```' }.to_a.each_with_index do |row, i|
+    rowno = first_empty + i
+    sheet.add_cell(rowno, 0, nil, @config['excel'][worksheet]['formula-a'].gsub('$ROW', (rowno + 1).to_s))
+    sheet.add_cell(rowno, 1, row[0])
+    sheet.add_cell(rowno, 2, row[1].to_i)
     columns.each_with_index do |cell, j|
-      sheet.add_cell(first_empty+i, 3+j, cell)
+      if cell[0,7] == 'formula'
+        sheet.add_cell(rowno, 3+j, nil, @config['excel'][worksheet][cell].gsub('$ROW', (rowno + 1).to_s))
+      elsif cell == 'date'
+        c = sheet.add_cell(rowno, 3+j)
+        c.set_number_format('dd.mm.YYYY')
+        c.change_contents(Date.today)
+      else
+        sheet.add_cell(rowno, 3+j, cell)
+      end
     end
   end
 end
@@ -152,13 +163,9 @@ end
 
 # populate player list
 populate_player_list
-@prompts = {
-  'alliance' => "The images I shared contain screenshots from the game Last Fortress. They represent a list of players in an alliance and their combat power (CP). All numeric values are using comma as a thousands separator. Please extract all players and their CPs (full scores, not rounded to millions or anything) in a CSV-compatible format. Your response should ONLY contain the comma separated list of player names and CPs. Also, for player names, here is the actual player list - please use it to correct what you read from the images to get consistent names: #{@ids.values.join(', ')}",
-  'ad' => "The images I shared contain screenshots from the game Last Fortress. They represent a list of players in an alliance and their contributions to alliance duel. All numeric values are using comma as a thousands separator. Please extract all players and their alliance duel scores (full scores, not rounded to millions or anything) in a CSV-compatible format. Your response should ONLY contain the comma separated list of player names and CPs. Also, for player names, here is the actual player list - please use it to correct what you read from the images to get consistent names: #{@ids.values.join(', ')}", 
-  'cities' => "The images I shared contain screenshots from the game Last Fortress. They represent a list of players that contributed to attacking a city. There always is player name, contribution score, and for the top 3 players also merits. All numeric values are using comma as a thousands separator. Please extract all players and their contribution scores (full scores, not rounded to millions or anything, also ignore the merit scores if they exist) in a CSV-compatible format. Your response should ONLY contain the comma separated list of player names and contribution scores. Also, for player names, here is the actual player list - please use it to correct what you read from the images to get consistent names: #{@ids.values.join(', ')}"
-}
 
 # Loop over all images and extract information
+# TODO: refactor so we don't repeat so much code thats very similar
 if opts.combat_powers?
   puts "===== PLAYER CPs ====="
   images = []
@@ -167,10 +174,10 @@ if opts.combat_powers?
     images << extract_player_info(path, i, 'alliance')
   end
   images.each_slice(3) do |slice|
-    output.concat(extract_info_gpt(@prompts['alliance'], slice))
+    output.concat(extract_info_gpt(@config['gpt']['prompts']['alliance'], slice))
   end
   print_data(output)
-  write_data_excel('CPs', output)
+  write_data_excel('CPs', output, 'date', 'formula-e')
   clear_temp
 end
 
@@ -182,7 +189,7 @@ if opts.alliance_duel?
     images << extract_player_info(path, i, 'ad')
   end
   images.each_slice(3) do |slice|
-    output.concat(extract_info_gpt(@prompts['ad'], slice))
+    output.concat(extract_info_gpt(@config['gpt']['prompts']['ad'], slice))
   end
   print_data(output)
   clear_temp
@@ -196,7 +203,7 @@ if opts.cities?
     images << extract_player_info(path, i, 'cities_rally')
   end
   images.each_slice(3) do |slice|
-    output.concat(extract_info_gpt(@prompts['cities'], slice))
+    output.concat(extract_info_gpt(@config['gpt']['prompts']['cities'], slice))
   end
   print_data(output, 'siege')
   clear_temp
@@ -208,7 +215,7 @@ if opts.cities?
     images << extract_player_info(path, i, 'cities_dm')
   end
   images.each_slice(3) do |slice|
-    output.concat(extract_info_gpt(@prompts['cities'], slice))
+    output.concat(extract_info_gpt(@config['gpt']['prompts']['cities'], slice))
   end
   print_data(output, 'dm')
   clear_temp
