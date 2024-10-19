@@ -37,9 +37,10 @@ opts = Slop.parse do |o|
   end
 end
 
-# Use chatGPT (4-omini) and its vision component to extract info from the cropped screenshots
+
 def extract_info_gpt(prompt, images = [])
   gpt = OpenAI::Client.new(access_token: @config['gpt'])
+  
   messages = []
   images.each do |image|
     messages << {
@@ -49,7 +50,9 @@ def extract_info_gpt(prompt, images = [])
       }
     } 
   end
+  
   messages << { type: "text", text: prompt }
+
   response = gpt.chat(
         parameters: {
           model: "gpt-4o-mini",
@@ -57,24 +60,14 @@ def extract_info_gpt(prompt, images = [])
           max_tokens: 300
         }
       )
+
   model_name = response.dig("model")
   prompt_tokens = response.dig("usage", "prompt_tokens")
   completion_tokens = response.dig("usage", "completion_tokens")
   total_tokens = response.dig("usage", "total_tokens")
-  response_text = response.dig("choices", 0, "message", "content")
-  sleep 5
-  return CSV.new(response_text).read
-end
 
-# Crop images to extract only the parts containing relevant info
-def extract_player_info(image_path, index, type)
-  image = Magick::Image::read(image_path).first
-  index == 0 && @crops.has_key?("#{type}_first") ? crop = @crops["#{type}_first"] : crop = @crops[type]
-  crop = @crops[type]
-  cropped_name = "temp-cropped-#{index}.jpg"
-  cropped_image = image.crop(crop[0], crop[1], crop[2], crop[3], true);
-  cropped_image.write(cropped_name)
-  return cropped_name
+  response_text = response.dig("choices", 0, "message", "content")
+  return CSV.new(response_text).read
 end
 
 # Get current alliance members and prepare a string similarity matrix to avoid unnecessary bloating of the Excel
@@ -87,7 +80,6 @@ def populate_player_list
   end
 end
 
-# find first empty row in a spreadsheet - the workbook.sheet_data.size does not work so doing it manually by traversing the sheet and looking for first empty row
 def find_first_empty_row(worksheet)
   sheet = @workbook[worksheet]
   begin
@@ -100,7 +92,6 @@ def find_first_empty_row(worksheet)
   end
 end
 
-# recheck each player name against existing names performing cosine similarity, replace when > 90% match
 def sanitize_player_name(str)
   clean_name = str.gsub(/\W*/,'')
   similarities = {}
@@ -110,13 +101,12 @@ def sanitize_player_name(str)
     similarities[sim] = [name, i]
   end
   possible_match = similarities.sort.last
-  if possible_match[0] > 0.9
+  if possible_match[0] > 0.7
     clean_name = possible_match[1][0]
   end
   return clean_name
 end
 
-# print out a tab-separated list of extracted data to be pasted into Excel
 def print_data(output, *columns)
   columns.reject!(&:empty?)
   output.each do |name, score|
@@ -130,22 +120,19 @@ def print_data(output, *columns)
   end
 end
 
-# write data into excel
 def write_data_excel(worksheet, data, *columns)
-  sheet = @workbook[worksheet]
   first_empty = find_first_empty_row(worksheet)
+  sheet = @workbook[worksheet]
   data.to_a.each_with_index do |row, i|
-    next if row[0][0,3] == '```'
-    sheet.add_cell(first_empty+i, 0, '', worksheet[1][0].formula)
-    sheet.add_cell(first_empty+i, 1, row[0])
-    sheet.add_cell(first_empty+i, 2, row[1])
-    columns.each_with_index do |cell, j|
-      sheet.add_cell(first_empty+i, 3+j, cell)
+    sheet[i + first_empty][0].formula = sheet[first_empty][0].formula
+    sheet[i + first_empty][1] = row[0]
+    sheet[i + first_empty][2] = row[1]
+    columns.each_with_index do |col, j|
+      sheet[i + first_empty][3 + j] = col
     end
   end
 end
 
-# clear any temporary cropped images
 def clear_temp
   Dir.glob(["*.jpg"]) { |f| File.delete(f) }
 end
@@ -213,5 +200,3 @@ if opts.cities?
   print_data(output, 'dm')
   clear_temp
 end
-
-@workbook.write("new.xlsx")

@@ -1,10 +1,12 @@
-# exclude everything
+# exclude all images and config
 *.jpg
 ad/*
 alliance/*
 cities/*
+ulx/*
 config/config.yml
 
+# include image directories
 ad/.gitkeep 
 alliance/.gitkeep
 cities/.gitkeep
