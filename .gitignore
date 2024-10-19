@@ -7,6 +7,6 @@ ulx/*
 config/config.yml
 
 # include image directories
-ad/.gitkeep 
-alliance/.gitkeep
-cities/.gitkeep
+!ad/.gitkeep 
+!alliance/.gitkeep
+!cities/.gitkeep
