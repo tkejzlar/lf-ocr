@@ -75,6 +75,7 @@ def extract_player_info(image_path, index, type)
   return cropped_name
 end
 
+# Get city name - does not use GPT but manual extraction via Tesseract
 def get_city_name(image_path)
   image = Magick::Image::read(image_path).first
   crop = @config['crops']['cities_name']
@@ -163,6 +164,7 @@ def write_data_excel(type, data, *columns)
   end
 end
 
+# Hook for getting city names and levels
 def hook_cities(image)
   r = get_city_name(image)
   return r if r != nil
@@ -175,24 +177,27 @@ end
 
 # process scores for a given type of images
 def process_scores(type, crops = nil, *additional_fields)
-  puts "===== #{type.upcase} ====="
   images = []
   output = []
   more_fields = []
   crops = type if crops == nil
+  puts "===== #{crops.upcase} ====="
   raw_images = Dir["#{type}/*.png"]
   raw_images.each_with_index do |path, i|
-    images << extract_player_info(path, i, crops)
     begin
       r = send("hook_#{type}", path)
-      more_fields = r if r != nil
+      if r != nil
+        more_fields = r
+        next
+      end
     rescue
     end
+    images << extract_player_info(path, i, crops)
   end
   images.each_slice(3) do |slice|
     output.concat(extract_info_gpt(@config['gpt']['prompts'][type], slice))
   end
-  print_data(output)
+  print_data(output, more_fields.concat(additional_fields))
   formulas = @config['excel'][type].select { |k, v| k.include?('formula') && k != 'formula-a'}
   write_data_excel(type, output, more_fields.concat(additional_fields), 'date', formulas.keys)
   clear_temp
