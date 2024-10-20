@@ -21,19 +21,24 @@ cities = Dir["cities/*.png"]
 fountain = Dir["dimensions/fountain/*.png"]
 
 @ids = {}
-@workbook = RubyXL::Parser.parse("alliance.xlsx")
-@workbook.calc_pr.full_calc_on_load = true
 
 opts = Slop.parse do |o|
   o.bool '-ad', '--alliance-duel', 'parse alliance duel data'
   o.bool '-cp', '--combat-powers', 'parse combat power data'
   o.bool '-ct', '--cities', 'parse city capture data'
   o.bool '-df', '--dimension-fountain', 'parse Fountain of Life weekly leaderboard'
+  o.string '-xls', '--excel-input', 'input excel file, unless -out is provided data will be added to it'
+  o.string '-out', '--excel-output', 'output excel file, if not provided the input will be overwritten'
   o.on '--version', 'print the version' do
     puts Slop::VERSION
     exit
   end
 end
+
+opts[:excel_input] ? xls = opts[:excel_input] : xls = 'alliance.xlsx'
+@workbook = RubyXL::Parser.parse(xls)
+@workbook.calc_pr.full_calc_on_load = true
+
 
 # Use chatGPT (4-omini) and its vision component to extract info from the cropped screenshots
 def extract_info_gpt(prompt, images = [])
@@ -43,7 +48,7 @@ def extract_info_gpt(prompt, images = [])
     messages << {
       type: "image_url", 
       image_url: {
-        url: "data:image/jpeg;base64,#{Base64.encode64(File.open(image, "rb").read)}}"
+        url: "data:image/jpeg;base64,#{Base64.encode64(File.open(image.first, "rb").read)}}"
       }
     } 
   end
@@ -61,7 +66,11 @@ def extract_info_gpt(prompt, images = [])
   total_tokens = response.dig("usage", "total_tokens")
   response_text = response.dig("choices", 0, "message", "content")
   sleep 5
-  return CSV.new(response_text).read
+  data = CSV.new(response_text).read
+  if images.first.length > 1
+    data = data.map { |e| e.concat(images.first.drop(1)).flatten }
+  end
+  return data
 end
 
 # Crop images to extract only the parts containing relevant info
@@ -129,13 +138,13 @@ end
 # print out a tab-separated list of extracted data to be pasted into Excel
 def print_data(output, *columns)
   columns.reject!(&:empty?)
-  output.each do |name, score|
-    next if name[0,3] == '```'
-    name = sanitize_player_name(name)
+  output.each do |row|
+    next if row[0][0,3] == '```'
+    name = sanitize_player_name(row[0])
     if columns.length > 0
-      puts "#{name}\t#{score}\t#{columns.join("\t")}\t#{Time.now.strftime("%d/%m/%Y")}"
+      puts "#{name}\t#{row.drop(1).join("\t")}\t#{columns.join("\t")}\t#{Time.now.strftime("%d/%m/%Y")}"
     else
-      puts "#{name}\t#{score}\t#{Time.now.strftime("%d/%m/%Y")}"
+      puts "#{name}\t#{row.drop(1).join("\t")}\t#{Time.now.strftime("%d/%m/%Y")}"
     end
   end
 end
@@ -147,18 +156,22 @@ def write_data_excel(type, data, *columns)
   first_empty = find_first_empty_row(worksheet)
   data.select{ |k,v| k[0,3] != '```' }.to_a.each_with_index do |row, i|
     rowno = first_empty + i
+    s = 0
     sheet.add_cell(rowno, 0, nil, @config['excel'][type]['formula-a'].gsub('$ROW', (rowno + 1).to_s))
-    sheet.add_cell(rowno, 1, row[0])
+    sheet.add_cell(rowno, 1, sanitize_player_name(row[0]))
     sheet.add_cell(rowno, 2, row[1].to_i)
+    row.drop(2).each_with_index do |r, s|
+      sheet.add_cell(rowno, 2 + s, r)
+    end
     columns.flatten.each_with_index do |cell, j|
       if cell[0,7] == 'formula'
-        sheet.add_cell(rowno, 3+j, nil, @config['excel'][type][cell].gsub('$ROW', (rowno + 1).to_s))
+        sheet.add_cell(rowno, 3+s+j, nil, @config['excel'][type][cell].gsub('$ROW', (rowno + 1).to_s))
       elsif cell == 'date'
-        c = sheet.add_cell(rowno, 3+j)
+        c = sheet.add_cell(rowno, 3+s+j)
         c.set_number_format('dd.mm.YYYY')
         c.change_contents(Date.today)
       else
-        sheet.add_cell(rowno, 3+j, cell)
+        sheet.add_cell(rowno, 3+s+j, cell)
       end
     end
   end
@@ -192,14 +205,14 @@ def process_scores(type, crops = nil, *additional_fields)
       end
     rescue
     end
-    images << extract_player_info(path, i, crops)
+    images << [extract_player_info(path, i, crops), more_fields]
   end
   images.each_slice(3) do |slice|
     output.concat(extract_info_gpt(@config['gpt']['prompts'][type], slice))
   end
-  print_data(output, more_fields.concat(additional_fields))
+  print_data(output, additional_fields)
   formulas = @config['excel'][type].select { |k, v| k.include?('formula') && k != 'formula-a'}
-  write_data_excel(type, output, more_fields.concat(additional_fields), 'date', formulas.keys)
+  write_data_excel(type, output, additional_fields, 'date', formulas.keys)
   clear_temp
 end
 
@@ -220,4 +233,5 @@ if opts.cities?
   process_scores('cities', 'cities_dm', 'dm')
 end
 
-@workbook.write("new.xlsx")
+opts[:excel_output] ? out = opts[:excel_output] : out = xls
+@workbook.write(out)
